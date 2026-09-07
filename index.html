@@ -963,7 +963,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 <div class="actions"><div class="wrap"><span class="note" id="status">Draft saved 13:54:06</span><div>
 <button class="secondary" type="button" onclick="downloadPDF()">Save as PDF</button>
 <button class="secondary" type="button" onclick="downloadExcel()">Download Excel</button>
-<button class="primary" type="button" onclick="sendEmail()">Send via Email</button>
+<button class="primary" type="button" id="submitGoogleBtn" onclick="submitToGoogleSheet()">Submit to Cloudlync</button>
+<button class="secondary" type="button" onclick="sendEmail()">Send via Email</button>
 <button class="danger" type="button" onclick="clearForm()">Clear</button>
 <button class="secondary" type="button" onclick="showSummary()">Review Submission</button>
 </div></div></div>
@@ -1057,6 +1058,85 @@ function sectionData(){
     });
     return {label, rows};
   });
+}
+
+const GOOGLE_SHEET_WEB_APP_URL='https://script.google.com/macros/s/AKfycbzqqi5mWaMlYj_419u0eNM_tZG16X9fxx0cWUccfZ0p5QSf-yQPP_UgqYVquWxR-C68kg/exec';
+
+function buildGoogleSheetPayload(){
+  const v=values();
+  const responses=[];
+  sectionData().forEach(sec=>{
+    sec.rows.forEach(r=>{
+      responses.push({
+        assessment: sec.label,
+        question: (r.num ? r.num+'. ' : '') + r.question,
+        answer: r.answer || ''
+      });
+    });
+  });
+
+  // Store project/contact/authorization information in the same row-per-question format.
+  [
+    ['Submission Details','Phone Number',v.phone||''],
+    ['Submission Details','Assessment / Project Name',v.project_name||''],
+    ['Submission Details','Questionnaire Date',v.date||''],
+    ['Authorization','Authorized Signatory',v.sign_name||''],
+    ['Authorization','Designation / Title',v.sign_title||''],
+    ['Authorization','Customer Authorization',v.ack_auth==='yes'?'Yes':'Not confirmed'],
+    ['Authorization','Concerns / Systems to Exclude',v.concerns||''],
+    ['Authorization','Preferred Test Window / Blackout Dates',v.test_window||''],
+    ['Authorization','Emergency Point of Contact',v.emergency_contact||''],
+    ['Authorization','E-signature',v.e_signature||''],
+    ['Authorization','Date Signed',v.sign_date||'']
+  ].forEach(x=>responses.push({assessment:x[0],question:x[1],answer:x[2]}));
+
+  return {
+    company:v.customer_name||'',
+    contact:v.primary_contact||'',
+    email:v.primary_email||'',
+    responses
+  };
+}
+
+async function submitToGoogleSheet(){
+  if(!form.reportValidity()) return;
+  if(!checks.some(c=>c.checked)){
+    alert('Please select at least one assessment before submitting.');
+    document.querySelector('.assessment-selector')?.scrollIntoView({behavior:'smooth',block:'start'});
+    return;
+  }
+  if(!requireAuth()) return;
+  if(!confirm('Submit this completed VAPT questionnaire to Cloudlync?')) return;
+
+  const btn=document.getElementById('submitGoogleBtn');
+  const status=document.getElementById('status');
+  const original=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='Submitting...';
+  status.textContent='Submitting questionnaire to Cloudlync...';
+
+  try{
+    const response=await fetch(GOOGLE_SHEET_WEB_APP_URL,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(buildGoogleSheetPayload()),
+      redirect:'follow'
+    });
+    if(!response.ok) throw new Error('Server returned HTTP '+response.status);
+    const result=await response.json();
+    if(!result.success) throw new Error(result.message||'Submission was not accepted.');
+
+    localStorage.setItem(key,JSON.stringify(values()));
+    status.textContent='Submitted successfully — Reference: '+result.submissionId;
+    alert('Thank you. Your VAPT questionnaire has been submitted successfully.\n\nReference: '+result.submissionId);
+  }catch(err){
+    console.error(err);
+    status.textContent='Submission failed — your local draft is still saved.';
+    alert('We could not submit the questionnaire to Cloudlync. Your draft remains saved in this browser.\n\nPlease check your internet connection and try again.\n\nTechnical detail: '+err.message);
+  }finally{
+    btn.disabled=false;
+    btn.textContent=original;
+  }
 }
 
 function downloadExcel(){
